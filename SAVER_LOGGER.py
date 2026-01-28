@@ -1,16 +1,18 @@
 # encoding: utf-8
-from burp import IBurpExtender, IHttpListener, IScannerListener, IExtensionStateListener, ITab
+from burp import IBurpExtender, IHttpListener, IExtensionStateListener, ITab
 from javax.swing import (JPanel, JButton, JFileChooser, JTextPane, JScrollPane, JOptionPane,
                          JCheckBox, JLabel, JTextField, JTabbedPane, BorderFactory, JSpinner,
-                         SpinnerNumberModel, UIManager, JTextArea)
+                         SpinnerNumberModel, UIManager, JTextArea, SwingUtilities)
 from java.awt import BorderLayout, Dimension, Font, GridBagLayout, GridBagConstraints, Insets, FlowLayout
 from java.io import FileOutputStream, OutputStreamWriter, BufferedWriter, File
 from java.nio.charset import Charset
 from java.util import Timer, TimerTask
+from java.util.concurrent import locks
+from java.lang import Thread, Runnable
 import datetime, os
 
 
-class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionStateListener, ITab):
+class BurpExtender(IBurpExtender, IHttpListener, IExtensionStateListener, ITab):
 
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
@@ -18,26 +20,83 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         self._callbacks.setExtensionName("SAVER_LOGGER")
 
         self._callbacks.registerHttpListener(self)
-        self._callbacks.registerScannerListener(self)
         self._callbacks.registerExtensionStateListener(self)
 
-        # Core data storage
+        # Thread-safe data storage with lock
         self.log_data = []
         self.request_counter = 0
         self.runtime_id = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+        self.data_lock = locks.ReentrantLock()  # Thread safety for log_data
         
         # Request tracking for insertion points and timing
-        self.request_tracking = {}  # Maps request_id -> {start_time, end_time, insertion_points}
+        self.request_tracking = {}
+        self.tracking_lock = locks.ReentrantLock()  # Thread safety for tracking
 
         # Settings
         self.auto_backup_enabled = True
         self.backup_folder = os.path.join(os.path.expanduser("~"), "Desktop")
         self.backup_interval_seconds = 60
         self.backup_timer = None
+        self.last_backup_time = 0  # Track last backup to prevent over-firing
+
+        # Processing queue and worker thread
+        self.processing_queue = []
+        self.queue_lock = locks.ReentrantLock()
+        self.worker_thread = None
+        self.shutdown_flag = False
 
         self._init_ui()
         self._callbacks.addSuiteTab(self)
+        self._start_worker_thread()
         self._start_backup_scheduler()
+
+    # ------------- WORKER THREAD FOR PROCESSING ------------- #
+
+    def _start_worker_thread(self):
+        """Start background worker thread for processing requests"""
+        self.shutdown_flag = False
+        
+        class Worker(Runnable):
+            def __init__(self, extender):
+                self.extender = extender
+            
+            def run(self):
+                while not self.extender.shutdown_flag:
+                    try:
+                        # Check if there's work to do
+                        work_item = None
+                        self.extender.queue_lock.lock()
+                        try:
+                            if len(self.extender.processing_queue) > 0:
+                                work_item = self.extender.processing_queue.pop(0)
+                        finally:
+                            self.extender.queue_lock.unlock()
+                        
+                        if work_item:
+                            self.extender._process_request_data(work_item)
+                        else:
+                            # Sleep briefly if queue is empty
+                            Thread.sleep(100)
+                    except Exception as e:
+                        print("[SAVER_LOGGER] Worker thread error: %s" % str(e))
+        
+        self.worker_thread = Thread(Worker(self))
+        self.worker_thread.setDaemon(True)
+        self.worker_thread.start()
+
+    def _process_request_data(self, work_item):
+        """Process request data in background thread"""
+        try:
+            tool_flag = work_item['tool_flag']
+            message_info = work_item['message_info']
+            is_request = work_item['is_request']
+            
+            if is_request:
+                self._handle_request(tool_flag, message_info)
+            else:
+                self._handle_response(tool_flag, message_info)
+        except Exception as e:
+            print("[SAVER_LOGGER] Processing error: %s" % str(e))
 
     # ------------- UI ------------- #
 
@@ -89,6 +148,7 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         <ul>
         <li>Logs HTTP requests from all Burp tools</li>
         <li>Tracks insertion points, request counts, and timing</li>
+        <li>Thread-safe background processing</li>
         <li>Auto-saves log file on crash / closures</li>
         <li>Manual export & backup supported</li>
         <li>Interval-based auto-backups to custom path</li>
@@ -150,6 +210,7 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         self.status_area.append("Extension Loaded\n")
         self.status_area.append("Auto-backup ready\n")
         self.status_area.append("HTTP logging active\n")
+        self.status_area.append("Background worker thread started\n")
         self.status_area.append("Backup location: " + self.backup_folder + "\n")
         settings.add(JScrollPane(self.status_area), BorderLayout.CENTER)
 
@@ -171,12 +232,24 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         
         self._start_backup_scheduler()
         
-        self.status_area.append("\n[%s] Settings saved!" % datetime.datetime.now().strftime('%H:%M:%S'))
-        self.status_area.append("\n  - Auto-backup: %s" % ("Enabled" if self.auto_backup_enabled else "Disabled"))
-        self.status_area.append("\n  - Interval: %d seconds" % self.backup_interval_seconds)
-        self.status_area.append("\n  - Location: %s\n" % self.backup_folder)
+        self._append_status("\n[%s] Settings saved!" % datetime.datetime.now().strftime('%H:%M:%S'))
+        self._append_status("\n  - Auto-backup: %s" % ("Enabled" if self.auto_backup_enabled else "Disabled"))
+        self._append_status("\n  - Interval: %d seconds" % self.backup_interval_seconds)
+        self._append_status("\n  - Location: %s\n" % self.backup_folder)
         
         JOptionPane.showMessageDialog(self.panel, "Settings saved successfully!")
+
+    def _append_status(self, text):
+        """Thread-safe status area update"""
+        class StatusUpdater(Runnable):
+            def __init__(self, status_area, message):
+                self.status_area = status_area
+                self.message = message
+            
+            def run(self):
+                self.status_area.append(self.message)
+        
+        SwingUtilities.invokeLater(StatusUpdater(self.status_area, text))
 
     # ------------- BACKUP SCHEDULER ------------- #
 
@@ -185,111 +258,130 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
             self.backup_timer.cancel()
 
         if not self.auto_backup_enabled:
-            self.status_area.append("\n[%s] Auto-backup disabled" % datetime.datetime.now().strftime('%H:%M:%S'))
+            self._append_status("\n[%s] Auto-backup disabled" % datetime.datetime.now().strftime('%H:%M:%S'))
             return
 
         self.backup_timer = Timer("SAVER_LOGGER_AutoSave", True)
 
         class Task(TimerTask):
-            def run(task_self):
-                if self.auto_backup_enabled:
-                    self._auto_backup()
+            def __init__(self, extender):
+                self.extender = extender
+            
+            def run(self):
+                if self.extender.auto_backup_enabled:
+                    # Check if enough time has passed since last backup
+                    current_time = System.currentTimeMillis() / 1000
+                    if (current_time - self.extender.last_backup_time) >= self.extender.backup_interval_seconds:
+                        self.extender._auto_backup()
+                        self.extender.last_backup_time = current_time
 
+        from java.lang import System
         delay = 10000  # 10 seconds initial delay
         period = self.backup_interval_seconds * 1000
-        self.backup_timer.schedule(Task(), delay, period)
+        self.backup_timer.schedule(Task(self), delay, period)
         
-        self.status_area.append("\n[%s] Auto-backup scheduler started (every %ds)" % 
+        self._append_status("\n[%s] Auto-backup scheduler started (every %ds)" % 
                                 (datetime.datetime.now().strftime('%H:%M:%S'), self.backup_interval_seconds))
 
     # ------------- HTTP LOGGING ------------- #
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         """
-        Captures HTTP requests and responses with full metadata including:
-        - Insertion points (for Intruder/Scanner)
-        - Request timing (start/end)
-        - Request count per URL
+        High-volume method - offload processing to background thread
         """
-        if messageIsRequest:
-            # Start tracking this request
-            req = self._helpers.analyzeRequest(messageInfo)
-            url = str(req.getUrl())
-            request_bytes = messageInfo.getRequest()
-            tool = self._callbacks.getToolName(toolFlag)
-            
-            # Count insertion points based on tool and markers
-            insertion_point_count = 0
-            
-            try:
-                # Convert request bytes to string for marker detection
-                request_str = self._helpers.bytesToString(request_bytes)
-                
-                # For Intruder: Count § markers (payload positions)
-                if tool == "Intruder":
-                    insertion_point_count = request_str.count('§') / 2  # Each insertion point has 2 markers
-                
-                # For Scanner: Estimate based on parameters
-                elif tool == "Scanner":
-                    # Count parameters (query + body) as potential insertion points
-                    params = req.getParameters()
-                    if params:
-                        insertion_point_count = len(params)
-                
-                # For other tools with parameters
-                else:
-                    # Count only if there are actual parameters
-                    params = req.getParameters()
-                    if params and len(params) > 0:
-                        insertion_point_count = len(params)
-                        
-            except Exception as e:
-                insertion_point_count = 0
-            
-            # Track request start time
-            start_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Create tracking entry
+        # Queue work item for background processing
+        work_item = {
+            'tool_flag': toolFlag,
+            'message_info': messageInfo,
+            'is_request': messageIsRequest
+        }
+        
+        self.queue_lock.lock()
+        try:
+            self.processing_queue.append(work_item)
+        finally:
+            self.queue_lock.unlock()
+
+    def _handle_request(self, toolFlag, messageInfo):
+        """Handle request in background thread"""
+        req = self._helpers.analyzeRequest(messageInfo)
+        url = str(req.getUrl())
+        request_bytes = messageInfo.getRequest()
+        tool = self._callbacks.getToolName(toolFlag)
+        
+        # Count insertion points
+        insertion_point_count = self._count_insertion_points(req, request_bytes, tool)
+        
+        # Track request start time
+        start_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Get next request ID (thread-safe)
+        self.data_lock.lock()
+        try:
             req_id = self.request_counter + 1
+        finally:
+            self.data_lock.unlock()
+        
+        # Store tracking entry (thread-safe)
+        self.tracking_lock.lock()
+        try:
             self.request_tracking[req_id] = {
                 'start_time': start_time,
                 'end_time': None,
                 'insertion_points': int(insertion_point_count),
                 'url': url
             }
-            
-        else:
-            # Response received - finalize the log entry
-            req = self._helpers.analyzeRequest(messageInfo)
-            res_bytes = messageInfo.getResponse()
+        finally:
+            self.tracking_lock.unlock()
 
-            status = "-"
-            if res_bytes:
-                try:
-                    res = self._helpers.analyzeResponse(res_bytes)
-                    status = str(res.getStatusCode())
-                except:
-                    status = "Error"
+    def _handle_response(self, toolFlag, messageInfo):
+        """Handle response in background thread"""
+        req = self._helpers.analyzeRequest(messageInfo)
+        res_bytes = messageInfo.getResponse()
 
-            url = str(req.getUrl())
-            host = messageInfo.getHttpService().getHost()
-            method = req.getMethod()
-            tool = self._callbacks.getToolName(toolFlag)
-            end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        status = "-"
+        if res_bytes:
+            try:
+                res = self._helpers.analyzeResponse(res_bytes)
+                status = str(res.getStatusCode())
+            except:
+                status = "Error"
 
+        url = str(req.getUrl())
+        host = messageInfo.getHttpService().getHost()
+        method = req.getMethod()
+        tool = self._callbacks.getToolName(toolFlag)
+        end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Thread-safe increment and get
+        self.data_lock.lock()
+        try:
             self.request_counter += 1
-            
-            # Get tracking data for this request
-            tracking = self.request_tracking.get(self.request_counter, {})
-            start_time = tracking.get('start_time', end_time)
-            insertion_points = tracking.get('insertion_points', 0)
+            current_id = self.request_counter
             
             # Count how many times this URL has been requested
             request_count = sum(1 for entry in self.log_data if entry[3] == url) + 1
+        finally:
+            self.data_lock.unlock()
+        
+        # Get tracking data (thread-safe)
+        self.tracking_lock.lock()
+        try:
+            tracking = self.request_tracking.get(current_id, {})
+            start_time = tracking.get('start_time', end_time)
+            insertion_points = tracking.get('insertion_points', 0)
             
-            # Store complete log entry with all required columns
+            # Clean up tracking data
+            if current_id in self.request_tracking:
+                del self.request_tracking[current_id]
+        finally:
+            self.tracking_lock.unlock()
+        
+        # Store complete log entry (thread-safe)
+        self.data_lock.lock()
+        try:
             self.log_data.append([
-                self.request_counter,      # Serial No
+                current_id,                 # Serial No
                 host,                       # Host
                 method,                     # Request Method
                 url,                        # URL
@@ -300,14 +392,26 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
                 start_time,                 # Start Time
                 end_time                    # End Time
             ])
-            
-            # Clean up old tracking data to prevent memory bloat
-            if self.request_counter in self.request_tracking:
-                del self.request_tracking[self.request_counter]
+        finally:
+            self.data_lock.unlock()
 
-    def newScanIssue(self, issue):
-        """Scanner listener implementation"""
-        pass
+    def _count_insertion_points(self, req, request_bytes, tool):
+        """
+        Count insertion points based on tool and request analysis.
+        Note: Intruder removes § markers before sending, so we count parameters instead.
+        """
+        insertion_point_count = 0
+        
+        try:
+            # For all tools: count parameters as potential insertion points
+            params = req.getParameters()
+            if params:
+                insertion_point_count = len(params)
+                
+        except Exception as e:
+            insertion_point_count = 0
+        
+        return insertion_point_count
 
     # ------------- EXPORT + BACKUP ------------- #
 
@@ -319,17 +423,30 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         
         result = self._write_full_csv(filepath)
         if result:
-            self.status_area.append("\n[%s] Manual backup completed: %d requests" % 
-                                    (datetime.datetime.now().strftime('%H:%M:%S'), len(self.log_data)))
+            count = 0
+            self.data_lock.lock()
+            try:
+                count = len(self.log_data)
+            finally:
+                self.data_lock.unlock()
+            
+            self._append_status("\n[%s] Manual backup completed: %d requests" % 
+                                    (datetime.datetime.now().strftime('%H:%M:%S'), count))
             JOptionPane.showMessageDialog(self.panel, 
                                           "Backup completed successfully!\n%d requests saved to:\n%s" % 
-                                          (len(self.log_data), filepath))
+                                          (count, filepath))
         else:
             JOptionPane.showMessageDialog(self.panel, "Backup failed! Check console for errors.")
 
     def _auto_backup(self):
         """Automatic backup triggered by timer - overwrites same file"""
-        if not self.log_data:
+        self.data_lock.lock()
+        try:
+            has_data = len(self.log_data) > 0
+        finally:
+            self.data_lock.unlock()
+        
+        if not has_data:
             return
         
         # Auto-backup uses a consistent filename (overwrites each time)
@@ -338,12 +455,25 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         
         result = self._write_full_csv(filepath)
         if result:
-            self.status_area.append("\n[%s] Auto-backup: %d requests saved" % 
-                                    (datetime.datetime.now().strftime('%H:%M:%S'), len(self.log_data)))
+            count = 0
+            self.data_lock.lock()
+            try:
+                count = len(self.log_data)
+            finally:
+                self.data_lock.unlock()
+            
+            self._append_status("\n[%s] Auto-backup: %d requests saved" % 
+                                    (datetime.datetime.now().strftime('%H:%M:%S'), count))
 
     def export_csv_manual(self, event):
         """Manual CSV export with file chooser"""
-        if not self.log_data:
+        self.data_lock.lock()
+        try:
+            has_data = len(self.log_data) > 0
+        finally:
+            self.data_lock.unlock()
+        
+        if not has_data:
             JOptionPane.showMessageDialog(self.panel, "No data to export!")
             return
 
@@ -358,22 +488,33 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
             
             result = self._write_full_csv(filepath)
             if result:
+                count = 0
+                self.data_lock.lock()
+                try:
+                    count = len(self.log_data)
+                finally:
+                    self.data_lock.unlock()
+                
                 JOptionPane.showMessageDialog(self.panel, 
                                               "Export successful!\n%d requests saved to:\n%s" % 
-                                              (len(self.log_data), filepath))
+                                              (count, filepath))
             else:
                 JOptionPane.showMessageDialog(self.panel, "Export failed! Check console for errors.")
 
     def _write_full_csv(self, filepath):
         """
         Write ALL log data to a single CSV file with complete column structure.
-        
-        Columns:
-        Serial No, Host, Request Method, URL, Status Code, Tool Name, 
-        Request Count, Insertion Point Count, Start Time, End Time
+        Thread-safe implementation.
         """
-        if not self.log_data:
-            return False
+        self.data_lock.lock()
+        try:
+            if not self.log_data:
+                return False
+            
+            # Create a snapshot of the data
+            data_snapshot = list(self.log_data)
+        finally:
+            self.data_lock.unlock()
 
         try:
             # Always overwrite with complete data (not append)
@@ -384,13 +525,13 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
             writer.write("# Generated By: SAVER_LOGGER\n")
             writer.write("# Session ID: %s\n" % self.runtime_id)
             writer.write("# Export Time: %s\n" % datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            writer.write("# Total Requests: %d\n\n" % len(self.log_data))
+            writer.write("# Total Requests: %d\n\n" % len(data_snapshot))
             
-            # Column headers - EXACTLY as specified
+            # Column headers
             writer.write("Serial No,Host,Request Method,URL,Status Code,Tool Name,Request Count,Insertion Point Count,Start Time,End Time\n")
 
             # Write ALL data rows
-            for row in self.log_data:
+            for row in data_snapshot:
                 # Sanitize data: replace commas, newlines, and carriage returns
                 safe = [str(col).replace(",", ";").replace("\n", " ").replace("\r", " ") for col in row]
                 writer.write(",".join(safe) + "\n")
@@ -400,7 +541,7 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
             writer.write("# Burp Suite Version: %s\n" % self._callbacks.getBurpVersion()[0])
             writer.write("# Exported: %s\n" % datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             writer.write("# Runtime ID: %s\n" % self.runtime_id)
-            writer.write("# Total Requests Logged: %d\n" % len(self.log_data))
+            writer.write("# Total Requests Logged: %d\n" % len(data_snapshot))
 
             writer.flush()
             writer.close()
@@ -414,20 +555,35 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
 
     def clear_logs(self, event):
         """Clear all logged data with confirmation"""
+        self.data_lock.lock()
+        try:
+            count = len(self.log_data)
+        finally:
+            self.data_lock.unlock()
+        
         confirm = JOptionPane.showConfirmDialog(
             self.panel,
-            "Are you sure you want to clear all %d logged requests?" % len(self.log_data),
+            "Are you sure you want to clear all %d logged requests?" % count,
             "Confirm Clear",
             JOptionPane.YES_NO_OPTION
         )
         
         if confirm == JOptionPane.YES_OPTION:
-            cleared_count = len(self.log_data)
-            self.log_data = []
-            self.request_counter = 0
-            self.request_tracking = {}
+            self.data_lock.lock()
+            try:
+                cleared_count = len(self.log_data)
+                self.log_data = []
+                self.request_counter = 0
+            finally:
+                self.data_lock.unlock()
             
-            self.status_area.append("\n[%s] All logs cleared (%d requests removed)" % 
+            self.tracking_lock.lock()
+            try:
+                self.request_tracking = {}
+            finally:
+                self.tracking_lock.unlock()
+            
+            self._append_status("\n[%s] All logs cleared (%d requests removed)" % 
                                     (datetime.datetime.now().strftime('%H:%M:%S'), cleared_count))
             JOptionPane.showMessageDialog(self.panel, "Logs cleared successfully!")
 
@@ -446,17 +602,38 @@ class BurpExtender(IBurpExtender, IHttpListener, IScannerListener, IExtensionSta
         Called when extension is unloaded or Burp closes/crashes.
         Performs final backup with timestamped filename.
         """
+        # Shutdown worker thread
+        self.shutdown_flag = True
+        if self.worker_thread:
+            try:
+                self.worker_thread.join(5000)  # Wait up to 5 seconds
+            except:
+                pass
+        
+        # Cancel backup timer
         if self.backup_timer:
             self.backup_timer.cancel()
         
         # Final backup on exit with timestamp
-        if self.log_data:
+        self.data_lock.lock()
+        try:
+            has_data = len(self.log_data) > 0
+        finally:
+            self.data_lock.unlock()
+        
+        if has_data:
             timestamp = datetime.datetime.now().strftime('%d%m%Y_%H%M%S')
             filename = "SAVER_LOGGER_AUTOSAVE_%s.csv" % timestamp
             filepath = os.path.join(self.backup_folder, filename)
             
             self._write_full_csv(filepath)
-            print("[SAVER_LOGGER] Exit backup completed: %d requests saved to %s" % 
-                  (len(self.log_data), filepath))
+            
+            self.data_lock.lock()
+            try:
+                count = len(self.log_data)
+            finally:
+                self.data_lock.unlock()
+            
+            print("[SAVER_LOGGER] Exit backup completed: %d requests saved to %s" % (count, filepath))
         else:
             print("[SAVER_LOGGER] Extension unloaded (no data to save)")
