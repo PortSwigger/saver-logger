@@ -1,0 +1,13 @@
+Uuid: 0cd5a55f876d4a8c8bd2e6a21e38af61
+ExtensionType: 2
+Name: Saver Logger
+RepoName: saver-logger
+ScreenVersion: 1.0.0
+SerialVersion: 1
+MinPlatformVersion: 2
+ProOnly: False
+Author: NonManuall
+ShortDescription: Logs all HTTP requests from Burp tools, capturing comprehensive metadata. Includes automatic/manual CSV export, crash-safe auto-backup, and UTF-8 encoding for full international character support.
+EntryPoint: SAVER_LOGGER.py
+BuildCommand: 
+SupportedProducts: Pro, Community
