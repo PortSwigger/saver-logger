@@ -3,10 +3,10 @@ ExtensionType: 2
 Name: Saver Logger
 RepoName: saver-logger
 ScreenVersion: 1.0.0
-SerialVersion: 1
+SerialVersion: 2
 MinPlatformVersion: 2
 ProOnly: False
-Author: NonManuall
+Author: IGNIT3D
 ShortDescription: Logs all HTTP requests from Burp tools to file, capturing comprehensive metadata.
 EntryPoint: SAVER_LOGGER.py
 BuildCommand: 
