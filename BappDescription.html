@@ -1,82 +1,31 @@
-<p>SAVER_LOGGER is a professional-grade Burp Suite extension designed for comprehensive HTTP request logging from all Burp Suite tools, including the Proxy, Scanner, Repeater, Intruder, and others. Combined with the metadata capturing abilities, SAVER_LOGGER offers a complete front to back logging solution inclusive of automatic or manual CSV data export, thereby providing a verifiable proof of authenticity.</p>
+<p>
+	Saver Logger automatically logs all HTTP requests across Proxy, Scanner, Repeater, Intruder, and other tools. It
+	captures comprehensive metadata including host, method, URL, status codes, insertion points, request timing, and
+	tool sources, then exports structured CSV files with complete audit trails.
+</p>
 
 <h2>Features</h2>
-
-<h3>Core Functionality</h3>
-
 <ul>
-	<li>Comprehensive Logging: Fully captures every HTTP request from all Burp tools</li>
-	<li>Complete Metadata: Records the host, method, URL, status code, tool source, insertion points, and timing</li>
-	<li>Insertion Point Detection: Works with the following tools - 
-	    <ul>
-	        <li>Intruder: Counts <code class=InlineCode>?</code> payload markers</li>
-	        <li>Scanner: Counts tested parameters</li>
-	        <li>Other tools: Identifies available parameters</li>
-	    </ul>
-    </li>
-	<li>Request Counting: Tracks the number of times each URL has been accessed</li>
-	<li>Timing Analysis: Documents start and end timestamps for each request</li>
-</ul>
-
-<h3>Export & Backup</h3>
-
-<ul>
-	<li>Auto-backup on Exit: Offers a crash-safe backup with timestamped filename, for instance, SAVER_LOGGER_AUTOSAVE_DDMMYYYY_HHMMSS.csv</li>
-	<li>Periodic Auto-backup: A user-configurable interval (10-3600 seconds) to a custom folder</li>
-	<li>Manual Export: A user-triggered CSV export with a file chooser dialog</li>
-	<li>Manual Backup: An immediate timestamped backup, like SAVER_LOGGER_BACKUP_DDMMYYYY_HHMMSS.csv</li>
-	<li>Single File Approach: A run-time configurable approach where periodic backups overwrite the same file to prevent fragmentation</li>
-</ul>
-
-<h3>Data Integrity</h3>
-
-<ul>
-	<li>UTF-8 Encoding: Ensures complete international character support</li>
-	<li>CSV Sanitization: Invariably manages commas, newlines, and special characters</li>
-	<li>Footer Metadata: Includes Burp version, export timestamp, and unique runtime ID</li>
-	<li>Session Tracking: A unique session identifier for complete audit trails</li>
-</ul>
-
-<h3>User Interface</h3>
-
-<ul>
-	<li>Dashboard Tab: Allows quick access to export, backup, and clear functions</li>
-	<li>Settings Tab: Allows users to set the backup folder, interval, and enable/disable auto-backup</li>
-	<li>Status Area: Gives real-time logging of all operations with timestamps</li>
-	<li>Confirmation Dialogs: Gives intuitive feedback for all user actions</li>
+	<li>Automatic logging of every HTTP request with complete metadata (host, method, URL, status code, tool source)
+	</li>
+	<li>Insertion point detection counting parameters</li>
+	<li>Request tracking with start/end timestamps and per-URL access counts</li>
+	<li>Configurable periodic auto-backup</li>
+	<li>Manual CSV export and backup with customizable filenames and locations</li>
+	<li>Session tracking with unique runtime ID and footer metadata for audit trails</li>
 </ul>
 
 <h2>Usage</h2>
-
-<p>Once the extension is activated, logging occurs automatically for all HTTP traffic. More fine-grained control is available through the SAVER_LOGGER Dashboard Tab, where users can navigate to the Settings tab to specify backup behavior. :</p>
-
-<h3>Dashboard Actions</h3>
-
-<ul>
-	<li><strong>Export CSV</strong>: This option allows users to choose the filename and location. By default, the name is SAVER_LOGGER_Export_YYYYMMDD_HHMMSS.csv. All logged requests are exported with complete metadata.</li>
-	<li><strong>Backup Now</strong>: Creates an instant timestamped backup that saves to the configured backup folder. The filename will be SAVER_LOGGER_BACKUP_DDMMYYYY_HHMMSS.csv. A dialog providing confirmation and file path will be shown.</li>
-	<li><strong>Clear Logs</strong>: Removes all recorded requests from memory, depending on user confirmation. Previously exported files are not deleted.</li>
-</ul>
-
-<h3>Settings Configuration</h3>
-
-<ul>
-	<li><strong>Auto-Backup Settings</strong>:</li>
-	<ul>
-		<li>Enable/Disable: Allows the user to toggle the feature of automatic periodic backups</li>
-		<li>Backup Interval: Enables the user to adjust the time between auto-backups within a range of 10-3600 seconds</li>
-		<li>Backup Folder: Permits the user to select a directory for backups</li>
-		<li>Default Location: Sets the destination to the Desktop</li>
-	</ul>
-</ul>
-
-<h3>Naming Conventions</h3>
-
-<p>Different types of backups and exports will have different filename conventions as follows:</p>
-
-<ul>
-	<li>Periodic Auto-backup &rarr; SAVER_LOGGER_AUTOSAVE.csv</li>
-	<li>Exit/Crash Backup &rarr; SAVER_LOGGER_AUTOSAVE_DDMMYYYY_HHMMSS.csv</li>
-	<li>Manual Backup &rarr; SAVER_LOGGER_BACKUP_DDMMYYYY_HHMMSS.csv</li>
-	<li>Manual Export &rarr; SAVER_LOGGER_Export_YYYYMMDD_HHMMSS.csv</li>
-</ul>
+<ol>
+	<li>Once loaded, the extension automatically logs all HTTP traffic from every tool</li>
+	<li>Access the Saver Logger tab to view the Dashboard and Settings</li>
+	<li>Configure auto-backup settings: enable/disable periodic backups, set interval (10-3600 seconds), and choose
+		backup folder (defaults to Desktop)</li>
+	<li>Use Export CSV to manually export with a file chooser dialog (default: <code
+			class="InlineCode">SAVER_LOGGER_Export_YYYYMMDD_HHMMSS.csv</code>)</li>
+	<li>Use Backup Now for instant timestamped backup to configured folder (<code
+			class="InlineCode">SAVER_LOGGER_BACKUP_DDMMYYYY_HHMMSS.csv</code>)</li>
+	<li>Periodic auto-backups overwrite <code class="InlineCode">SAVER_LOGGER_AUTOSAVE.csv</code> while exit
+		backups create timestamped files (<code class="InlineCode">SAVER_LOGGER_AUTOSAVE_DDMMYYYY_HHMMSS.csv</code>)
+	</li>
+</ol>

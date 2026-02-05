@@ -7,7 +7,7 @@ SerialVersion: 1
 MinPlatformVersion: 2
 ProOnly: False
 Author: NonManuall
-ShortDescription: Logs all HTTP requests from Burp tools, capturing comprehensive metadata. Includes automatic/manual CSV export, crash-safe auto-backup, and UTF-8 encoding for full international character support.
+ShortDescription: Logs all HTTP requests from Burp tools to file, capturing comprehensive metadata.
 EntryPoint: SAVER_LOGGER.py
 BuildCommand: 
 SupportedProducts: Pro, Community
